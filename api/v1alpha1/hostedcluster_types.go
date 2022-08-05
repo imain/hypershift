@@ -125,6 +125,7 @@ type HostedClusterSpec struct {
 	// specified, an ID is generated. After initial creation, the value is
 	// immutable.
 	// +kubebuilder:validation:Pattern:="[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}"
+	// +x-kubernetes-validations="self.ClusterID == oldSelf.ClusterID"
 	// +optional
 	ClusterID string `json:"clusterID,omitempty"`
 
