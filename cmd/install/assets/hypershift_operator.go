@@ -1341,9 +1341,11 @@ type HyperShiftValidatingWebhookConfiguration struct {
 
 func (o HyperShiftValidatingWebhookConfiguration) Build() *admissionregistrationv1.ValidatingWebhookConfiguration {
 	scope := admissionregistrationv1.NamespacedScope
-	path := "/validate-hypershift-openshift-io-v1alpha1-hostedcluster"
+	hcPath := "/validate-hypershift-openshift-io-v1alpha1-hostedcluster"
+	npPath := "/validate-hypershift-openshift-io-v1alpha1-nodepool"
 	sideEffects := admissionregistrationv1.SideEffectClassNone
 	timeout := int32(10)
+
 	validatingWebhookConfiguration := &admissionregistrationv1.ValidatingWebhookConfiguration{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ValidatingWebhookConfiguration",
@@ -1363,7 +1365,7 @@ func (o HyperShiftValidatingWebhookConfiguration) Build() *admissionregistration
 					{
 						Operations: []admissionregistrationv1.OperationType{
 							// NOTE: uncomment if we want to do create time validation
-							//admissionregistrationv1.Create,
+							admissionregistrationv1.Create,
 							admissionregistrationv1.Update,
 						},
 						Rule: admissionregistrationv1.Rule{
@@ -1378,7 +1380,35 @@ func (o HyperShiftValidatingWebhookConfiguration) Build() *admissionregistration
 					Service: &admissionregistrationv1.ServiceReference{
 						Namespace: "hypershift",
 						Name:      "operator",
-						Path:      &path,
+						Path:      &hcPath,
+					},
+				},
+				SideEffects:             &sideEffects,
+				AdmissionReviewVersions: []string{"v1"},
+				TimeoutSeconds:          &timeout,
+			},
+			{
+				Name: "nodepools.hypershift.openshift.io",
+				Rules: []admissionregistrationv1.RuleWithOperations{
+					{
+						Operations: []admissionregistrationv1.OperationType{
+							// NOTE: uncomment if we want to do create time validation
+							admissionregistrationv1.Create,
+							admissionregistrationv1.Update,
+						},
+						Rule: admissionregistrationv1.Rule{
+							APIGroups:   []string{"hypershift.openshift.io"},
+							APIVersions: []string{"v1alpha1"},
+							Resources:   []string{"nodepools"},
+							Scope:       &scope,
+						},
+					},
+				},
+				ClientConfig: admissionregistrationv1.WebhookClientConfig{
+					Service: &admissionregistrationv1.ServiceReference{
+						Namespace: "hypershift",
+						Name:      "operator",
+						Path:      &npPath,
 					},
 				},
 				SideEffects:             &sideEffects,

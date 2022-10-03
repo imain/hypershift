@@ -255,6 +255,9 @@ func run(ctx context.Context, opts *StartOptions, log logr.Logger) error {
 		if err := hostedcluster.SetupWebhookWithManager(ctx, mgr, log); err != nil {
 			return fmt.Errorf("unable to create webhook: %w", err)
 		}
+		if err := nodepool.SetupWebhookWithManager(mgr); err != nil {
+			return fmt.Errorf("unable to create webhook: %w", err)
+		}
 	}
 
 	if err := (&nodepool.NodePoolReconciler{
