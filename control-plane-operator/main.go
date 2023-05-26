@@ -9,6 +9,7 @@ import (
 
 	availabilityprober "github.com/openshift/hypershift/availability-prober"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/awsprivatelink"
+	"github.com/openshift/hypershift/control-plane-operator/controllers/etcddefrag"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/manifests"
 	"github.com/openshift/hypershift/control-plane-operator/hostedclusterconfigoperator"
 	"github.com/openshift/hypershift/dnsresolver"
@@ -372,6 +373,20 @@ func NewStartCommand() *cobra.Command {
 			MetricsSet:                    metricsSet,
 		}).SetupWithManager(mgr, upsert.New(enableCIDebugOutput).CreateOrUpdate); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "hosted-control-plane")
+			os.Exit(1)
+		}
+
+		controllerName := "EtcdDefragController"
+		if err := (&etcddefrag.DefragController{
+			Client:                 mgr.GetClient(),
+			ControllerName:         controllerName,
+			ServiceNamespace:       namespace,
+			ServiceName:            manifests.KubeAPIServerPrivateServiceName,
+			HCPNamespace:           namespace,
+			CreateOrUpdateProvider: upsert.New(enableCIDebugOutput),
+		}).SetupWithManager(ctx, mgr); err != nil {
+			controllerName := etcddefrag.ControllerName(manifests.KubeAPIServerPrivateServiceName)
+			setupLog.Error(err, "unable to create controller", "controller", controllerName)
 			os.Exit(1)
 		}
 
