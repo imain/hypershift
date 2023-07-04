@@ -10,14 +10,15 @@ import (
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
-	operatorv1 "github.com/openshift/api/operator/v1"
 	hyperv1 "github.com/openshift/hypershift/api/v1beta1"
 	"github.com/openshift/hypershift/pkg/etcdcli"
 	"github.com/openshift/hypershift/support/upsert"
@@ -34,6 +35,8 @@ const (
 	minDefragBytes                 int64   = 100 * 1024 * 1024 // 100MB
 	minDefragWaitDuration                  = 36 * time.Second
 	maxFragmentedPercentage        float64 = 45
+
+	controllerRequeueDuration = 5 * time.Minute
 )
 
 type DefragController struct {
@@ -41,20 +44,13 @@ type DefragController struct {
 
 	log logr.Logger
 
-	ControllerName   string
-	ServiceNamespace string
-	ServiceName      string
-	HCPNamespace     string
+	ControllerName string
+	HCPNamespace   string
 	upsert.CreateOrUpdateProvider
 
 	etcdClient         etcdcli.EtcdClient
-	operatorClient     v1helpers.OperatorClient
 	numDefragFailures  int
 	defragWaitDuration time.Duration
-}
-
-func ControllerName(name string) string {
-	return fmt.Sprintf("%s-observer", name)
 }
 
 /*
@@ -88,34 +84,31 @@ Work involved from here:
 */
 
 func (r *DefragController) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
-	r.log = ctrl.Log.WithName(r.ControllerName).WithValues("name", r.ServiceName, "namespace", r.ServiceNamespace)
-	_, err := controller.New(r.ControllerName, mgr, controller.Options{Reconciler: r})
-	if err != nil {
-		return err
-	}
-	return nil
+	b := ctrl.NewControllerManagedBy(mgr).
+		For(&hyperv1.HostedControlPlane{}).
+		WithOptions(controller.Options{
+			RateLimiter: workqueue.NewItemExponentialFailureRateLimiter(1*time.Second, 10*time.Second),
+		}).Named(r.ControllerName)
+
+	return b.Complete(r)
 }
 
 func (r *DefragController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.log = ctrl.LoggerFrom(ctx)
 	r.log.Info("reconciling")
 
 	// Fetch the HostedControlPlane
-	hcpList := &hyperv1.HostedControlPlaneList{}
-	if err := r.List(ctx, hcpList, &client.ListOptions{Namespace: r.HCPNamespace}); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get resource: %w", err)
+	hostedControlPlane := &hyperv1.HostedControlPlane{}
+	err := r.Client.Get(ctx, req.NamespacedName, hostedControlPlane)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
 	}
-	if len(hcpList.Items) == 0 {
-		// Return early if HostedControlPlane is deleted
-		return ctrl.Result{}, nil
-	}
-	if len(hcpList.Items) > 1 {
-		return ctrl.Result{}, fmt.Errorf("unexpected number of HostedControlPlanes in namespace, expected: 1, actual: %d", len(hcpList.Items))
-	}
-
-	hcp := hcpList.Items[0]
 
 	// Return early if HostedControlPlane is deleted
-	if !hcp.DeletionTimestamp.IsZero() {
+	if !hostedControlPlane.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
 
@@ -123,11 +116,11 @@ func (r *DefragController) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Run defragmentation.  This checks first to see if it needs it.
 	if err := r.runDefrag(ctx); err != nil {
-		return ctrl.Result{RequeueAfter: 5 * time.Minute}, fmt.Errorf("failed to defragment etcd: %w", err)
+		return ctrl.Result{RequeueAfter: controllerRequeueDuration}, fmt.Errorf("failed to defragment etcd: %w", err)
 	}
 
 	// Always requeue so that we can check again.
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	return ctrl.Result{RequeueAfter: controllerRequeueDuration}, nil
 }
 
 /*
@@ -254,18 +247,6 @@ func (r *DefragController) runDefrag(ctx context.Context) error {
 		r.numDefragFailures++
 		r.log.Info("DefragControllerDefragmentPartialFailure: only %d/%d members were successfully defragmented, %d tries left before controller degrades", successfulDefrags, len(endpointStatus), maxDefragFailuresBeforeDegrade-r.numDefragFailures)
 
-		if r.numDefragFailures >= maxDefragFailuresBeforeDegrade {
-			_, _, updateErr := v1helpers.UpdateStatus(ctx, r.operatorClient, v1helpers.UpdateConditionFn(operatorv1.OperatorCondition{
-				Type:    defragDegradedCondition,
-				Status:  operatorv1.ConditionTrue,
-				Reason:  "Error",
-				Message: fmt.Sprintf("degraded after %d attempts at defragmenting all etcd members", r.numDefragFailures),
-			}))
-			if updateErr != nil {
-				r.log.Info("DefragControllerUpdatingStatus", updateErr.Error())
-			}
-		}
-
 		// return all errors here for the sync loop to retry immediately
 		return v1helpers.NewMultiLineAggregate(errors)
 	}
@@ -275,18 +256,7 @@ func (r *DefragController) runDefrag(ctx context.Context) error {
 			v1helpers.NewMultiLineAggregate(errors).Error())
 	}
 
-	r.numDefragFailures = 0
-	_, _, updateErr := v1helpers.UpdateStatus(ctx, r.operatorClient,
-		v1helpers.UpdateConditionFn(operatorv1.OperatorCondition{
-			Type:   defragDegradedCondition,
-			Status: operatorv1.ConditionFalse,
-			Reason: "AsExpected",
-		}))
-	if updateErr != nil {
-		r.log.Info("DefragControllerUpdatingStatus", updateErr.Error())
-	}
-
-	return updateErr
+	return nil
 }
 
 // isEndpointBackendFragmented checks the status of all cluster members to ensure that no members have a fragmented store.

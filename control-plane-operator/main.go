@@ -380,12 +380,9 @@ func NewStartCommand() *cobra.Command {
 		if err := (&etcddefrag.DefragController{
 			Client:                 mgr.GetClient(),
 			ControllerName:         controllerName,
-			ServiceNamespace:       namespace,
-			ServiceName:            manifests.KubeAPIServerPrivateServiceName,
 			HCPNamespace:           namespace,
 			CreateOrUpdateProvider: upsert.New(enableCIDebugOutput),
 		}).SetupWithManager(ctx, mgr); err != nil {
-			controllerName := etcddefrag.ControllerName(manifests.KubeAPIServerPrivateServiceName)
 			setupLog.Error(err, "unable to create controller", "controller", controllerName)
 			os.Exit(1)
 		}
