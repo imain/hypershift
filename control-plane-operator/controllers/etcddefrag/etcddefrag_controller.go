@@ -22,6 +22,7 @@ import (
 	hyperv1 "github.com/openshift/hypershift/api/v1beta1"
 	"github.com/openshift/hypershift/pkg/etcdcli"
 	"github.com/openshift/hypershift/support/upsert"
+	"github.com/openshift/library-go/pkg/operator/events"
 	"github.com/openshift/library-go/pkg/operator/v1helpers"
 )
 
@@ -90,7 +91,16 @@ func (r *DefragController) SetupWithManager(ctx context.Context, mgr ctrl.Manage
 			RateLimiter: workqueue.NewItemExponentialFailureRateLimiter(1*time.Second, 10*time.Second),
 		}).Named(r.ControllerName)
 
-	return b.Complete(r)
+	if _, err := b.Build(r); err != nil {
+		return err
+	}
+
+	endpointsFunc := func() ([]string, error) {
+		return r.etcdEndpoints(ctx)
+	}
+	r.etcdClient = etcdcli.NewEtcdClient(endpointsFunc, events.NewLoggingEventRecorder(r.ControllerName))
+
+	return nil
 }
 
 func (r *DefragController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -121,6 +131,11 @@ func (r *DefragController) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Always requeue so that we can check again.
 	return ctrl.Result{RequeueAfter: controllerRequeueDuration}, nil
+}
+
+func (r *DefragController) etcdEndpoints(ctx context.Context) ([]string, error) {
+	// TODO: retrieve 'etcd-client' endpoints resource in the CPO namespace and return all addresses
+	panic("Unimplemented")
 }
 
 /*
