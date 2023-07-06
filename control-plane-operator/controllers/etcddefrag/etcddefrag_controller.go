@@ -10,10 +10,13 @@ import (
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,7 +40,7 @@ const (
 	minDefragWaitDuration                  = 36 * time.Second
 	maxFragmentedPercentage        float64 = 45
 
-	controllerRequeueDuration = 5 * time.Minute
+	controllerRequeueDuration = 1 * time.Minute
 )
 
 type DefragController struct {
@@ -105,7 +108,7 @@ func (r *DefragController) SetupWithManager(ctx context.Context, mgr ctrl.Manage
 
 func (r *DefragController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.log = ctrl.LoggerFrom(ctx)
-	r.log.Info("reconciling")
+	r.log.Info("reconciling for ETCD DEFRAG")
 
 	// Fetch the HostedControlPlane
 	hostedControlPlane := &hyperv1.HostedControlPlane{}
@@ -121,21 +124,47 @@ func (r *DefragController) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if !hostedControlPlane.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
+	r.log.Info("ETCD DEFRAG stage 2")
 
 	// TODO: Add logic to check hyperv1 api for correct settings to enable defrag.
 
 	// Run defragmentation.  This checks first to see if it needs it.
 	if err := r.runDefrag(ctx); err != nil {
+		r.log.Info("ETCD DEFRAG err")
 		return ctrl.Result{RequeueAfter: controllerRequeueDuration}, fmt.Errorf("failed to defragment etcd: %w", err)
 	}
+
+	r.log.Info("Returning and requeuing after 1min.  ETCD-DEFRAG")
 
 	// Always requeue so that we can check again.
 	return ctrl.Result{RequeueAfter: controllerRequeueDuration}, nil
 }
 
 func (r *DefragController) etcdEndpoints(ctx context.Context) ([]string, error) {
-	// TODO: retrieve 'etcd-client' endpoints resource in the CPO namespace and return all addresses
-	panic("Unimplemented")
+	var eplist []string
+
+	// Get the endpoints of the etcd service in the HCP namespace.
+	endpoints := &corev1.Endpoints{ObjectMeta: metav1.ObjectMeta{Name: "etcd-client", Namespace: r.HCPNamespace}}
+
+	if err := r.Get(ctx, crclient.ObjectKeyFromObject(endpoints), endpoints); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.log.Info("Operator service endpoints have not been created yet\n")
+			return eplist, nil
+		}
+		return eplist, err
+	}
+	if len(endpoints.Subsets) == 0 || len(endpoints.Subsets[0].Addresses) == 0 {
+		r.log.Info("Waiting for endpoints addresses to be populated\n")
+		return eplist, nil
+	}
+
+	for _, s := range endpoints.Subsets {
+		for i := 0; i < len(s.Addresses); i++ {
+			// https correct?
+			eplist = append(eplist, fmt.Sprintf("https://%s:%s", s.Addresses[i].IP, s.Ports[i].Port))
+		}
+	}
+	return eplist, nil
 }
 
 /*
