@@ -40,7 +40,6 @@ var (
 			oauthVolumeLoginTemplate().Name:     "/etc/kubernetes/secrets/templates/login",
 			oauthVolumeProvidersTemplate().Name: "/etc/kubernetes/secrets/templates/providers",
 			oauthVolumeWorkLogs().Name:          "/var/run/kubernetes",
-			oauthVolumeMasterCABundle().Name:    "/etc/kubernetes/certs/master-ca",
 		},
 	}
 )
@@ -85,6 +84,12 @@ func ReconcileDeployment(ctx context.Context, client client.Client, deployment *
 	if !ok {
 		return fmt.Errorf("oauth server: configuration not found in configmap")
 	}
+
+	// In order to make this backwards compatible with previous versions, only add the CA Bundle volume if the config map exists.
+	if caBundleConfigMapExists {
+		volumeMounts[oauthContainerMain().Name] = map[string]string{oauthVolumeMasterCABundle().Name: "/etc/kubernetes/certs/master-ca"}
+	}
+
 	deployment.Spec.Template.ObjectMeta.Annotations[configHashAnnotation] = util.ComputeHash(configBytes)
 	deployment.Spec.Template.Spec = corev1.PodSpec{
 		AutomountServiceAccountToken: utilpointer.Bool(false),
@@ -106,7 +111,7 @@ func ReconcileDeployment(ctx context.Context, client client.Client, deployment *
 			{Name: "konnectivity-proxy-ca", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: manifests.KonnectivityCAConfigMap("").Name}, DefaultMode: utilpointer.Int32(0640)}}},
 		},
 	}
-	// In order to make this backwards compatible with previous versions, only add the CA Bundle volume if the config map exists.
+	// Again, only add the CA Bundle volume if the config map exists.
 	if caBundleConfigMapExists {
 		deployment.Spec.Template.Spec.Volumes = append(deployment.Spec.Template.Spec.Volumes, util.BuildVolume(oauthVolumeMasterCABundle(), buildOAuthVolumeMasterCABundle))
 	}
