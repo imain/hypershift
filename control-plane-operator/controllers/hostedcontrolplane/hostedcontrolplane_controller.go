@@ -36,6 +36,7 @@ import (
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/cvo"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/dnsoperator"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/etcd"
+	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/etcddefrag"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/ignition"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/ignitionserver"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/imageprovider"
@@ -1104,6 +1105,12 @@ func (r *HostedControlPlaneReconciler) reconcile(ctx context.Context, hostedCont
 	explicitOauthConfig := hostedControlPlane.Spec.Configuration != nil && hostedControlPlane.Spec.Configuration.OAuth != nil
 	if err := r.reconcileKubeadminPassword(ctx, hostedControlPlane, explicitOauthConfig, createOrUpdate); err != nil {
 		return fmt.Errorf("failed to ensure control plane: %w", err)
+	}
+
+	// Reconcile etcd defrag controller
+	r.Log.Info("Reconciling etcd-defrag-controller")
+	if err = r.reconcileEtcdDefragController(ctx, hostedControlPlane, releaseImageProvider, createOrUpdate); err != nil {
+		return fmt.Errorf("failed to reconcile openshift oauth apiserver: %w", err)
 	}
 
 	if IsStorageAndCSIManaged(hostedControlPlane) {
@@ -2681,6 +2688,18 @@ func (r *HostedControlPlaneReconciler) reconcileOAuthServer(ctx context.Context,
 		return oauth.ReconcileDeployment(ctx, r, deployment, p.OwnerRef, oauthConfig, p.OAuthServerImage, p.DeploymentConfig, p.IdentityProviders(), p.OauthConfigOverrides, p.AvailabilityProberImage, util.APIPort(hcp), p.NamedCertificates(), p.Socks5ProxyImage, p.NoProxy)
 	}); err != nil {
 		return fmt.Errorf("failed to reconcile oauth deployment: %w", err)
+	}
+	return nil
+}
+
+func (r *HostedControlPlaneReconciler) reconcileEtcdDefragController(ctx context.Context, hcp *hyperv1.HostedControlPlane, releaseImageProvider *imageprovider.ReleaseImageProvider, createOrUpdate upsert.CreateOrUpdateFN) error {
+	ownerRef := config.OwnerRefFrom(hcp)
+
+	deployment := manifests.EtcdDefragControllerDeployment(hcp.Namespace)
+	if _, err := createOrUpdate(ctx, r, deployment, func() error {
+		return etcddefrag.ReconcileDeployment(ctx, deployment, releaseImageProvider.GetImage(util.CPOImageName), ownerRef)
+	}); err != nil {
+		return fmt.Errorf("failed to reconcile etcddefrag deployment: %w", err)
 	}
 	return nil
 }

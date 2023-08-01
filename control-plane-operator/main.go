@@ -12,6 +12,7 @@ import (
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/manifests"
 	"github.com/openshift/hypershift/control-plane-operator/hostedclusterconfigoperator"
 	"github.com/openshift/hypershift/dnsresolver"
+	etcddefrag "github.com/openshift/hypershift/etcd-defrag/cmd"
 	ignitionserver "github.com/openshift/hypershift/ignition-server/cmd"
 	konnectivitysocks5proxy "github.com/openshift/hypershift/konnectivity-socks5-proxy"
 	kubernetesdefaultproxy "github.com/openshift/hypershift/kubernetes-default-proxy"
@@ -81,6 +82,8 @@ func commandFor(name string) *cobra.Command {
 		cmd = availabilityprober.NewStartCommand()
 	case "token-minter":
 		cmd = tokenminter.NewStartCommand()
+	case "etcd-defrag-controller":
+		cmd = etcddefrag.NewStartCommand()
 	default:
 		// for the default case, there is no need
 		// to convert flags, return immediately
@@ -126,6 +129,7 @@ func defaultCommand() *cobra.Command {
 	cmd.AddCommand(availabilityprober.NewStartCommand())
 	cmd.AddCommand(tokenminter.NewStartCommand())
 	cmd.AddCommand(ignitionserver.NewStartCommand())
+	cmd.AddCommand(etcddefrag.NewStartCommand())
 	cmd.AddCommand(kubernetesdefaultproxy.NewStartCommand())
 	cmd.AddCommand(dnsresolver.NewCommand())
 
@@ -389,6 +393,17 @@ func NewStartCommand() *cobra.Command {
 			NameServerIP:                  nameServerIP,
 		}).SetupWithManager(mgr, upsert.New(enableCIDebugOutput).CreateOrUpdate); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "hosted-control-plane")
+			os.Exit(1)
+		}
+
+		controllerName := "EtcdDefragController"
+		if err := (&etcddefrag.DefragController{
+			Client:                 mgr.GetClient(),
+			ControllerName:         controllerName,
+			HCPNamespace:           namespace,
+			CreateOrUpdateProvider: upsert.New(enableCIDebugOutput),
+		}).SetupWithManager(ctx, mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", controllerName)
 			os.Exit(1)
 		}
 
