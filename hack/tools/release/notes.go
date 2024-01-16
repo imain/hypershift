@@ -33,7 +33,7 @@ func main() {
 
 	if fromTag == nil || toTag == nil ||
 		*fromTag == "" || *toTag == "" {
-		fmt.Println("--from and --to are mandatory")
+		fmt.Println("--from and --to are mandatory!")
 		os.Exit(1)
 	}
 	// Set the path to the Git repository
@@ -91,7 +91,8 @@ func main() {
 		}
 
 		if resp.StatusCode != 200 {
-			fmt.Println(fmt.Sprintf("API returned: %v", resp.StatusCode))
+			fmt.Println(fmt.Sprintf("API returned: %v.  Changelog incomplete!", resp.StatusCode))
+			return
 		}
 
 		// Parse the API response body.
